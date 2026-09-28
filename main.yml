@@ -1,0 +1,110 @@
+name: Build Android APK
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ANDROID_PLATFORM: "platforms;android-35"
+  ANDROID_BUILD_TOOLS: "35.0.0"
+  ANDROID_BUILD_TOOLS_AGP: "34.0.0"
+  GRADLE_VERSION: "8.10.2"
+  WEB_ASSETS: "apps/android/app/src/main/assets/web"
+  APK_PATH: "apps/android/app/build/outputs/apk/debug/app-debug.apk"
+
+jobs:
+  build:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          package-manager-cache: false
+
+      - name: Setup Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          cmdline-tools-version: "15859902"
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: false
+          packages: "platform-tools platforms;android-35 build-tools;35.0.0 build-tools;34.0.0"
+
+      - name: Install npm dependencies
+        shell: bash
+        run: |
+          set -e
+          npm install --no-audit --no-fund
+
+      - name: Build web
+        shell: bash
+        run: |
+          set -e
+          npm run build:web
+
+      - name: Sync web assets
+        shell: bash
+        run: |
+          set -e
+          npm run android:sync
+
+      - name: Verify web entry
+        shell: bash
+        run: |
+          set -e
+          test -s "$WEB_ASSETS/index.html"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: "8.10.2"
+
+      - name: Build APK
+        shell: bash
+        env:
+          PV_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          PV_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          PV_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -e
+          gradle -p apps/android --no-daemon --stacktrace assembleDebug
+
+      - name: Check APK
+        shell: bash
+        run: |
+          set -e
+          test -s "$APK_PATH"
+          sha256sum "$APK_PATH" > app-debug.apk.sha256
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: personal-vault-app-debug
+          path: |
+            ${{ env.APK_PATH }}
+            app-debug.apk.sha256
+          if-no-files-found: error
+          retention-days: 30
